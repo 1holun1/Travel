@@ -1,372 +1,253 @@
-# ========================================================
-# TRAVEL EXPENSE TRACKER (for your group trip)
-# ========================================================
-# Participants (fixed as you requested): 
-# Rachel, Cady, Justin, Plastic, Jovan, Evan, Clayton
-#
-# Features you asked for:
-# • Real input boxes / dropdowns for expenses (friends can use it easily)
-# • "All" option in "Who paid?" dropdown (expense is split equally among everyone)
-# • Separate "Transfer" function (e.g. "I borrowed RM500 from Jovan" – fully included in final calculation)
-# • Currency: default RM (Malaysian Ringgit), can switch to HKD anytime
-# • Live summary + final minimal money transfers to settle everything
-# • Save / Load / Clear data (JSON file)
-#
-# How to run:
-# 1. Save this entire code as travel_expense_tracker.py
-# 2. Run with: python travel_expense_tracker.py
-#
-# Phone support:
-# • Android → Install free "Pydroid 3" app from Play Store → paste code → run
-#   (Tkinter works perfectly there)
-# • iOS → Use "Pythonista" app (paid, Tkinter works with minor tweaks)
-# • If you want a native-looking mobile app (easier on phone), just reply and I will rewrite it with Kivy.
-#
-# No extra packages needed (only built-in tkinter).
-# ========================================================
+# app.py
+# Streamlit version of Travel Expense Tracker
+# For group trip with friends - equal split + transfers/borrows
 
-import tkinter as tk
-from tkinter import ttk, messagebox
-from tkinter import filedialog
+import streamlit as st
+import pandas as pd
 import json
+from io import StringIO, BytesIO
 
-# ================== DATA & PARTICIPANTS ==================
-participants = ["Rachel", "Cady", "Justin", "Plastic", "Jovan", "Evan", "Clayton"]
-expenses = []      # list of {"payer": str, "amount": float, "desc": str}
-transfers = []     # list of {"lender": str, "borrower": str, "amount": float, "desc": str}
+# ────────────────────────────────────────────────
+# DATA & PARTICIPANTS (fixed as requested)
+# ────────────────────────────────────────────────
+PARTICIPANTS = ["Rachel", "Cady", "Justin", "Plastic", "Jovan", "Evan", "Clayton"]
 
-# ================== GLOBAL VARIABLES ==================
-root = tk.Tk()
-currency_var = tk.StringVar(value="RM")
+if "expenses" not in st.session_state:
+    st.session_state.expenses = []          # [{"payer": str, "amount": float, "desc": str}]
+if "transfers" not in st.session_state:
+    st.session_state.transfers = []         # [{"lender": str, "borrower": str, "amount": float, "desc": str}]
+if "currency" not in st.session_state:
+    st.session_state.currency = "RM"
 
-# ================== HELPER FUNCTIONS ==================
+# ────────────────────────────────────────────────
+# HELPERS
+# ────────────────────────────────────────────────
 def get_symbol():
-    return currency_var.get() + " "
+    return st.session_state.currency + " "
 
-def get_total_expenses():
-    return sum(exp["amount"] for exp in expenses)
+def total_expenses():
+    return sum(e["amount"] for e in st.session_state.expenses)
 
-def get_paid():
-    paid_dict = {name: 0.0 for name in participants}
-    for exp in expenses:
-        amt = exp["amount"]
-        if exp["payer"] == "All":
-            share = amt / len(participants)
-            for name in participants:
-                paid_dict[name] += share
+def get_paid_dict():
+    paid = {p: 0.0 for p in PARTICIPANTS}
+    for e in st.session_state.expenses:
+        amt = e["amount"]
+        if e["payer"] == "All":
+            share = amt / len(PARTICIPANTS)
+            for p in PARTICIPANTS:
+                paid[p] += share
         else:
-            paid_dict[exp["payer"]] += amt
-    return paid_dict
+            paid[e["payer"]] += amt
+    return paid
 
-def get_transfers_adjust():
-    adj_dict = {name: 0.0 for name in participants}
-    for t in transfers:
-        adj_dict[t["lender"]] += t["amount"]
-        adj_dict[t["borrower"]] -= t["amount"]
-    return adj_dict
+def get_adjustment_dict():
+    adj = {p: 0.0 for p in PARTICIPANTS}
+    for t in st.session_state.transfers:
+        adj[t["lender"]]   += t["amount"]
+        adj[t["borrower"]] -= t["amount"]
+    return adj
 
 def get_balances():
-    total = get_total_expenses()
-    n = len(participants)
-    share = total / n if n > 0 else 0.0
-    paid_dict = get_paid()
-    adj_dict = get_transfers_adjust()
-    balances = {}
-    for name in participants:
-        balances[name] = paid_dict.get(name, 0.0) + adj_dict.get(name, 0.0) - share
-    return balances
+    total = total_expenses()
+    share = total / len(PARTICIPANTS) if PARTICIPANTS else 0.0
+    paid = get_paid_dict()
+    adj  = get_adjustment_dict()
+    return {p: paid.get(p, 0.0) + adj.get(p, 0.0) - share for p in PARTICIPANTS}
 
-def calculate_settlements():
+def calculate_minimal_transfers():
     balances = get_balances()
-    # Creditors (positive balance) and Debtors (amount they owe)
-    creditors = [[name, amt] for name, amt in balances.items() if amt > 0.01]
-    debtors = [[name, -amt] for name, amt in balances.items() if amt < -0.01]
+    # Positive = owed money (creditor), Negative = owes money (debtor)
+    creditors = [(name, amt) for name, amt in balances.items() if amt > 0.01]
+    debtors   = [(name, -amt) for name, amt in balances.items() if amt < -0.01]
+    
+    creditors.sort(key=lambda x: x[1], reverse=True)  # largest creditor first
+    debtors.sort(key=lambda x: x[1], reverse=True)     # largest debtor first
     
     transactions = []
-    ci = 0
-    di = 0
+    ci, di = 0, 0
     while ci < len(creditors) and di < len(debtors):
         c_name, c_amt = creditors[ci]
         d_name, d_amt = debtors[di]
         if c_amt <= 0 or d_amt <= 0:
             break
-        transfer_amt = min(c_amt, d_amt)
-        transactions.append(f"{d_name} should pay {c_name} {get_symbol()}{transfer_amt:.2f}")
-        creditors[ci][1] -= transfer_amt
-        debtors[di][1] -= transfer_amt
-        if creditors[ci][1] <= 0.01:
-            ci += 1
-        if debtors[di][1] <= 0.01:
-            di += 1
+        pay = min(c_amt, d_amt)
+        transactions.append(f"{d_name} → {c_name}   {get_symbol()}{pay:,.2f}")
+        creditors[ci] = (c_name, c_amt - pay)
+        debtors[di]   = (d_name, d_amt - pay)
+        if creditors[ci][1] < 0.01: ci += 1
+        if debtors[di][1]   < 0.01: di += 1
+    
     return transactions
 
-# ================== UPDATE DISPLAYS ==================
-def update_expenses_list():
-    for item in expense_tree.get_children():
-        expense_tree.delete(item)
-    sym = get_symbol()
-    for exp in expenses:
-        expense_tree.insert("", "end", values=(
-            exp["payer"],
-            f"{sym}{exp['amount']:.2f}",
-            exp["desc"]
-        ))
+# ────────────────────────────────────────────────
+# SAVE / LOAD
+# ────────────────────────────────────────────────
+def get_data_json():
+    data = {
+        "expenses": st.session_state.expenses,
+        "transfers": st.session_state.transfers,
+        "currency": st.session_state.currency
+    }
+    return json.dumps(data, indent=2)
 
-def update_transfers_list():
-    for item in transfer_tree.get_children():
-        transfer_tree.delete(item)
-    sym = get_symbol()
-    for t in transfers:
-        transfer_tree.insert("", "end", values=(
-            t["lender"],
-            t["borrower"],
-            f"{sym}{t['amount']:.2f}",
-            t["desc"]
-        ))
-
-def update_summary():
-    for item in summary_tree.get_children():
-        summary_tree.delete(item)
-    sym = get_symbol()
-    total = get_total_expenses()
-    n = len(participants)
-    share = total / n if n > 0 else 0.0
-    paid_dict = get_paid()
-    adj_dict = get_transfers_adjust()
-    balances = get_balances()
-    for name in participants:
-        p = paid_dict.get(name, 0.0)
-        a = adj_dict.get(name, 0.0)
-        b = balances.get(name, 0.0)
-        summary_tree.insert("", "end", values=(
-            name,
-            f"{sym}{p:.2f}",
-            f"{sym}{a:.2f}",
-            f"{sym}{share:.2f}",
-            f"{sym}{b:.2f}"
-        ))
-
-def update_all():
-    update_expenses_list()
-    update_transfers_list()
-    update_summary()
-
-# ================== SAVE / LOAD / CLEAR ==================
-def save_data():
-    file = filedialog.asksaveasfilename(
-        defaultextension=".json",
-        filetypes=[("JSON files", "*.json")],
-        title="Save Trip Data"
-    )
-    if file:
-        data = {
-            "expenses": expenses,
-            "transfers": transfers,
-            "currency": currency_var.get()
-        }
-        with open(file, "w") as f:
-            json.dump(data, f, indent=2)
-        messagebox.showinfo("Saved", f"Data saved to {file}")
-
-def load_data():
-    file = filedialog.askopenfilename(
-        filetypes=[("JSON files", "*.json")],
-        title="Load Trip Data"
-    )
-    if file:
-        try:
-            with open(file, "r") as f:
-                data = json.load(f)
-            expenses[:] = data.get("expenses", [])
-            transfers[:] = data.get("transfers", [])
-            if "currency" in data:
-                currency_var.set(data["currency"])
-            update_all()
-            messagebox.showinfo("Loaded", f"Data loaded from {file}")
-        except Exception:
-            messagebox.showerror("Error", "Failed to load file (invalid format)")
-
-def clear_all():
-    if messagebox.askyesno("Confirm Clear", "Delete ALL expenses and transfers?\nThis cannot be undone."):
-        expenses.clear()
-        transfers.clear()
-        update_all()
-        messagebox.showinfo("Cleared", "All data has been cleared.")
-
-# ================== GUI SETUP ==================
-root.title("Travel Expense Tracker - RM / HKD")
-root.geometry("950x720")
-
-# Top currency selector
-top_frame = ttk.Frame(root)
-top_frame.pack(fill="x", padx=10, pady=8)
-ttk.Label(top_frame, text="Currency:").pack(side="left")
-currency_combo = ttk.Combobox(
-    top_frame, 
-    textvariable=currency_var, 
-    values=["RM", "HKD"], 
-    state="readonly", 
-    width=6
-)
-currency_combo.pack(side="left", padx=5)
-currency_combo.set("RM")
-currency_var.trace_add("write", lambda *args: update_all())
-
-# Notebook (tabs)
-notebook = ttk.Notebook(root)
-notebook.pack(fill="both", expand=True, padx=10, pady=5)
-
-# ====================== TAB 1: ADD EXPENSE ======================
-expense_frame = ttk.Frame(notebook)
-notebook.add(expense_frame, text="Add Expense")
-
-ttk.Label(expense_frame, text="Who paid?").grid(row=0, column=0, padx=10, pady=8, sticky="w")
-payer_var = tk.StringVar()
-payer_combo = ttk.Combobox(
-    expense_frame, 
-    textvariable=payer_var, 
-    values=["All"] + participants, 
-    state="readonly", 
-    width=25
-)
-payer_combo.grid(row=0, column=1, padx=10, pady=8)
-
-ttk.Label(expense_frame, text="Amount:").grid(row=1, column=0, padx=10, pady=8, sticky="w")
-amount_var = tk.StringVar()
-ttk.Entry(expense_frame, textvariable=amount_var, width=25).grid(row=1, column=1, padx=10, pady=8)
-
-ttk.Label(expense_frame, text="Description:").grid(row=2, column=0, padx=10, pady=8, sticky="w")
-desc_var = tk.StringVar()
-ttk.Entry(expense_frame, textvariable=desc_var, width=45).grid(row=2, column=1, padx=10, pady=8)
-
-def add_expense():
+def load_from_json(json_str):
     try:
-        amt = float(amount_var.get())
-        if amt <= 0:
-            raise ValueError
-        payer = payer_var.get()
-        if not payer:
-            raise ValueError("Please select who paid")
-        desc = desc_var.get().strip() or "No description"
-        expenses.append({"payer": payer, "amount": amt, "desc": desc})
-        messagebox.showinfo("Success", f"Expense added: {get_symbol()}{amt:.2f}")
-        amount_var.set("")
-        desc_var.set("")
-        payer_var.set("")
-        update_all()
-    except:
-        messagebox.showerror("Error", "Please enter a valid positive amount and select payer")
+        data = json.loads(json_str)
+        st.session_state.expenses = data.get("expenses", [])
+        st.session_state.transfers = data.get("transfers", [])
+        st.session_state.currency = data.get("currency", "RM")
+        st.success("Data loaded successfully!")
+    except Exception as e:
+        st.error(f"Failed to load: {e}")
 
-ttk.Button(expense_frame, text="Add Expense", command=add_expense).grid(row=3, column=1, pady=12)
+# ────────────────────────────────────────────────
+# UI
+# ────────────────────────────────────────────────
+st.set_page_config(page_title="Travel Expense Tracker", layout="wide")
 
-# Recorded expenses list
-ttk.Label(expense_frame, text="Recorded Expenses:").grid(row=4, column=0, columnspan=2, sticky="w", padx=10)
-expense_tree = ttk.Treeview(expense_frame, columns=("Payer", "Amount", "Description"), show="headings", height=9)
-expense_tree.heading("Payer", text="Who Paid")
-expense_tree.heading("Amount", text="Amount")
-expense_tree.heading("Description", text="Description")
-expense_tree.column("Payer", width=120)
-expense_tree.column("Amount", width=110)
-expense_tree.column("Description", width=380)
-expense_tree.grid(row=5, column=0, columnspan=2, padx=10, pady=5, sticky="ew")
+st.title("✈️ Travel Expense Tracker")
+st.caption("Group trip splitting – equal shares + borrows/transfers")
 
-# ====================== TAB 2: ADD TRANSFER ======================
-transfer_frame = ttk.Frame(notebook)
-notebook.add(transfer_frame, text="Add Transfer")
+# Currency selector (top right)
+col_currency = st.columns([6,1])[1]
+with col_currency:
+    curr = st.selectbox("Currency", ["RM", "HKD"], index=0 if st.session_state.currency == "RM" else 1,
+                        label_visibility="collapsed")
+    if curr != st.session_state.currency:
+        st.session_state.currency = curr
+        st.rerun()
 
-ttk.Label(transfer_frame, text="Lender (who lent the money):").grid(row=0, column=0, padx=10, pady=8, sticky="w")
-lender_var = tk.StringVar()
-ttk.Combobox(transfer_frame, textvariable=lender_var, values=participants, state="readonly", width=25).grid(row=0, column=1, padx=10, pady=8)
+tab_exp, tab_trans, tab_sum, tab_settle, tab_data = st.tabs([
+    "Add Expense", "Add Transfer", "Summary", "Settle Up", "Data"
+])
 
-ttk.Label(transfer_frame, text="Borrower (who received the money):").grid(row=1, column=0, padx=10, pady=8, sticky="w")
-borrower_var = tk.StringVar()
-ttk.Combobox(transfer_frame, textvariable=borrower_var, values=participants, state="readonly", width=25).grid(row=1, column=1, padx=10, pady=8)
+# ── TAB: Add Expense ────────────────────────────────────────
+with tab_exp:
+    st.subheader("Record a shared expense")
+    col1, col2, col3 = st.columns([2, 2, 4])
+    with col1:
+        payer = st.selectbox("Who paid?", ["All"] + PARTICIPANTS)
+    with col2:
+        amount = st.number_input("Amount", min_value=0.01, step=0.01, format="%.2f")
+    with col3:
+        desc = st.text_input("Description (optional)")
 
-ttk.Label(transfer_frame, text="Amount:").grid(row=2, column=0, padx=10, pady=8, sticky="w")
-trans_amount_var = tk.StringVar()
-ttk.Entry(transfer_frame, textvariable=trans_amount_var, width=25).grid(row=2, column=1, padx=10, pady=8)
+    if st.button("Add Expense", type="primary"):
+        if amount > 0 and payer:
+            st.session_state.expenses.append({
+                "payer": payer,
+                "amount": amount,
+                "desc": desc.strip() or "—"
+            })
+            st.success(f"Added {get_symbol()}{amount:,.2f}")
+            st.rerun()
+        else:
+            st.error("Please enter amount > 0 and select payer")
 
-ttk.Label(transfer_frame, text="Description:").grid(row=3, column=0, padx=10, pady=8, sticky="w")
-trans_desc_var = tk.StringVar()
-ttk.Entry(transfer_frame, textvariable=trans_desc_var, width=45).grid(row=3, column=1, padx=10, pady=8)
+    if st.session_state.expenses:
+        df_exp = pd.DataFrame(st.session_state.expenses)
+        df_exp["amount"] = df_exp["amount"].apply(lambda x: f"{get_symbol()}{x:,.2f}")
+        st.dataframe(df_exp[["payer", "amount", "desc"]], use_container_width=True, hide_index=True)
 
-def add_transfer():
-    try:
-        amt = float(trans_amount_var.get())
-        if amt <= 0:
-            raise ValueError
-        lender = lender_var.get()
-        borrower = borrower_var.get()
-        if not lender or not borrower:
-            raise ValueError
-        if lender == borrower:
-            raise ValueError("Lender and borrower cannot be the same")
-        desc = trans_desc_var.get().strip() or "Borrowed money"
-        transfers.append({"lender": lender, "borrower": borrower, "amount": amt, "desc": desc})
-        messagebox.showinfo("Success", f"Transfer recorded: {get_symbol()}{amt:.2f}")
-        trans_amount_var.set("")
-        trans_desc_var.set("")
-        lender_var.set("")
-        borrower_var.set("")
-        update_all()
-    except:
-        messagebox.showerror("Error", "Invalid amount or selection\n(Lender cannot be the same as Borrower)")
+# ── TAB: Add Transfer ───────────────────────────────────────
+with tab_trans:
+    st.subheader("Record borrow / lend / transfer")
+    col1, col2, col3 = st.columns([2, 2, 4])
+    with col1:
+        lender = st.selectbox("Lender (who gave money)", PARTICIPANTS, key="lender")
+    with col2:
+        borrower = st.selectbox("Borrower (who received)", PARTICIPANTS, key="borrower")
+    with col3:
+        t_amount = st.number_input("Amount", min_value=0.01, step=0.01, format="%.2f", key="t_amt")
+        t_desc = st.text_input("Note (optional)", key="t_desc")
 
-ttk.Button(transfer_frame, text="Add Transfer (Borrow/Lend)", command=add_transfer).grid(row=4, column=1, pady=12)
+    if st.button("Add Transfer", type="primary"):
+        if t_amount > 0 and lender and borrower and lender != borrower:
+            st.session_state.transfers.append({
+                "lender": lender,
+                "borrower": borrower,
+                "amount": t_amount,
+                "desc": t_desc.strip() or "—"
+            })
+            st.success(f"Recorded {get_symbol()}{t_amount:,.2f}")
+            st.rerun()
+        else:
+            st.error("Invalid: amount > 0, lender ≠ borrower")
 
-# Recorded transfers list
-ttk.Label(transfer_frame, text="Recorded Transfers:").grid(row=5, column=0, columnspan=2, sticky="w", padx=10)
-transfer_tree = ttk.Treeview(transfer_frame, columns=("Lender", "Borrower", "Amount", "Description"), show="headings", height=9)
-transfer_tree.heading("Lender", text="Lender")
-transfer_tree.heading("Borrower", text="Borrower")
-transfer_tree.heading("Amount", text="Amount")
-transfer_tree.heading("Description", text="Description")
-transfer_tree.column("Lender", width=120)
-transfer_tree.column("Borrower", width=120)
-transfer_tree.column("Amount", width=110)
-transfer_tree.column("Description", width=300)
-transfer_tree.grid(row=6, column=0, columnspan=2, padx=10, pady=5, sticky="ew")
+    if st.session_state.transfers:
+        df_t = pd.DataFrame(st.session_state.transfers)
+        df_t["amount"] = df_t["amount"].apply(lambda x: f"{get_symbol()}{x:,.2f}")
+        st.dataframe(df_t[["lender", "borrower", "amount", "desc"]], use_container_width=True, hide_index=True)
 
-# ====================== TAB 3: SUMMARY ======================
-summary_frame = ttk.Frame(notebook)
-notebook.add(summary_frame, text="Summary")
-
-ttk.Label(summary_frame, text="Live Balances for everyone:", font=("Arial", 10, "bold")).pack(pady=8)
-summary_tree = ttk.Treeview(summary_frame, columns=("Name", "Paid", "Adjustment", "Should Pay", "Balance"), show="headings", height=12)
-for col, width in zip(("Name", "Paid", "Adjustment", "Should Pay", "Balance"), (110, 110, 110, 110, 130)):
-    summary_tree.heading(col, text=col)
-    summary_tree.column(col, width=width)
-summary_tree.pack(fill="both", expand=True, padx=10, pady=5)
-
-# ====================== TAB 4: SETTLE UP ======================
-settle_frame = ttk.Frame(notebook)
-notebook.add(settle_frame, text="Settle Up")
-
-ttk.Label(settle_frame, text="Final money transfers needed (minimal transactions):", font=("Arial", 10, "bold")).pack(pady=8)
-
-sett_text = tk.Text(settle_frame, height=18, width=85, font=("Arial", 10))
-sett_text.pack(padx=10, pady=5, fill="both", expand=True)
-
-def show_settlements():
-    sett_text.delete(1.0, tk.END)
-    trans_list = calculate_settlements()
-    if not trans_list:
-        sett_text.insert(tk.END, "✅ Everyone is already settled!\nNo transfers needed.")
+# ── TAB: Summary ────────────────────────────────────────────
+with tab_sum:
+    st.subheader("Live Balances")
+    if not st.session_state.expenses and not st.session_state.transfers:
+        st.info("No data yet. Add expenses or transfers above.")
     else:
-        sett_text.insert(tk.END, "Recommended transfers to settle everything:\n\n")
-        for line in trans_list:
-            sett_text.insert(tk.END, line + "\n")
+        balances = get_balances()
+        total = total_expenses()
+        share = total / len(PARTICIPANTS) if PARTICIPANTS else 0.0
+        paid_d = get_paid_dict()
+        adj_d = get_adjustment_dict()
 
-ttk.Button(settle_frame, text="Calculate Transfers Now", command=show_settlements).pack(pady=10)
+        data = []
+        for p in PARTICIPANTS:
+            data.append({
+                "Name": p,
+                "Paid": paid_d.get(p, 0.0),
+                "Adj": adj_d.get(p, 0.0),
+                "Should Pay": share,
+                "Balance": balances[p]
+            })
+        df = pd.DataFrame(data)
+        df_styled = df.style.format({
+            "Paid": f"{get_symbol()}{{:,.2f}}",
+            "Adj": f"{get_symbol()}{{:,.2f}}",
+            "Should Pay": f"{get_symbol()}{{:,.2f}}",
+            "Balance": lambda x: f"**{get_symbol()}{x:,.2f}**" if x >= 0 else f"{get_symbol()}{x:,.2f}"
+        }).apply(lambda row: ['background: #e6ffe6' if row["Balance"] > 0 else
+                              'background: #ffe6e6' if row["Balance"] < 0 else '' for _ in row], axis=1)
 
-# ====================== BOTTOM BUTTONS ======================
-bottom_frame = ttk.Frame(root)
-bottom_frame.pack(fill="x", padx=10, pady=10)
+        st.dataframe(df_styled, use_container_width=True, hide_index=True)
 
-ttk.Button(bottom_frame, text="💾 Save Trip Data", command=save_data).pack(side="left", padx=5)
-ttk.Button(bottom_frame, text="📂 Load Trip Data", command=load_data).pack(side="left", padx=5)
-ttk.Button(bottom_frame, text="🗑️ Clear All Data", command=clear_all).pack(side="left", padx=5)
+# ── TAB: Settle Up ──────────────────────────────────────────
+with tab_settle:
+    st.subheader("How to settle (minimal transfers)")
+    trans = calculate_minimal_transfers()
+    if not trans:
+        st.success("Everyone is settled! ✓ No transfers needed.")
+    else:
+        for line in trans:
+            st.markdown(f"**{line}**")
 
-# ================== START THE APP ==================
-update_all()          # initial empty state
-root.mainloop()
+# ── TAB: Data ───────────────────────────────────────────────
+with tab_data:
+    st.subheader("Save / Load Data")
+    st.download_button(
+        label="Download current data (JSON)",
+        data=get_data_json(),
+        file_name="trip_expenses.json",
+        mime="application/json"
+    )
+
+    st.write("Or upload saved JSON:")
+    uploaded = st.file_uploader("Upload JSON file", type=["json"])
+    if uploaded:
+        try:
+            json_str = uploaded.read().decode("utf-8")
+            load_from_json(json_str)
+            st.rerun()
+        except:
+            st.error("Invalid file format.")
+
+    if st.button("Clear ALL data", type="primary"):
+        if st.button("Really clear everything? (cannot undo)", type="primary"):
+            st.session_state.expenses = []
+            st.session_state.transfers = []
+            st.session_state.currency = "RM"
+            st.success("All data cleared.")
+            st.rerun()
+
+st.markdown("---")
+st.caption("Made for your group trip • Equal split + manual transfers • RM / HKD")
