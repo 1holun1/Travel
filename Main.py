@@ -1,27 +1,4 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Trip Expense Splitter</title>
-    <style>
-        body { font-family: sans-serif; margin: 20px; }
-    </style>
-</head>
-<body>
-    <h1>✅ Your App is Ready!</h1>
-    <p>Here is the **complete, copy-paste-ready** Streamlit program exactly as per the outline we agreed on.</p>
-    <p><strong>How to run it (works on phone + computer):</strong></p>
-    <ol>
-        <li>Install: <code>pip install streamlit</code> (only dependency!)</li>
-        <li>Create a new file <code>app.py</code> and paste the entire code below.</li>
-        <li>Run: <code>streamlit run app.py</code></li>
-        <li>Open in browser (phone or computer). It works perfectly on mobile too.</li>
-        <li>Optional: Deploy free to Streamlit Community Cloud for a shareable link.</li>
-    </ol>
-    <p>Data is saved via Download/Upload JSON (so you never lose your trip data even if you close the tab).</p>
-    <p>Participants pre-loaded: Rachel, Cady, Justin, Plastic, Jovan, Evan, Clayton (you can add/remove anytime).</p>
-    <hr>
-    <h2>Full Code (app.py)</h2>
-    <pre><code>import streamlit as st
+import streamlit as st
 import uuid
 import json
 from collections import defaultdict
