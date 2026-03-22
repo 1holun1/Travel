@@ -1,7 +1,6 @@
 import streamlit as st
 import uuid
 import json
-from collections import defaultdict
 
 # ====================== PAGE CONFIG ======================
 st.set_page_config(
@@ -26,10 +25,25 @@ symbol = "RM" if currency == "RM" else "HK$"
 
 # Data Management
 st.sidebar.subheader("Data Management")
+
 if st.sidebar.button("🔄 Reset All Data"):
     st.session_state.participants = ["Rachel", "Cady", "Justin", "Plastic", "Jovan", "Evan", "Clayton"]
     st.session_state.expenses = []
     st.session_state.transfers = []
+    st.rerun()
+
+if st.sidebar.button("🛠️ Repair Invalid Data"):
+    # Remove any corrupted expenses
+    st.session_state.expenses = [
+        e for e in st.session_state.expenses
+        if isinstance(e, dict) and all(k in e for k in ["id", "payer", "amount", "description", "split_with"])
+    ]
+    # Remove any corrupted transfers
+    st.session_state.transfers = [
+        t for t in st.session_state.transfers
+        if isinstance(t, dict) and all(k in t for k in ["id", "from_person", "to_person", "amount", "description"])
+    ]
+    st.success("✅ Data repaired! All bad records removed.")
     st.rerun()
 
 # Download backup
@@ -55,10 +69,11 @@ if uploaded:
         st.session_state.participants = data.get("participants", ["Rachel", "Cady", "Justin", "Plastic", "Jovan", "Evan", "Clayton"])
         st.session_state.expenses = data.get("expenses", [])
         st.session_state.transfers = data.get("transfers", [])
+        st.session_state.currency = data.get("currency", "RM")
         st.success("✅ Backup loaded!")
         st.rerun()
-    except:
-        st.error("Invalid backup file")
+    except Exception as e:
+        st.error(f"Invalid backup file: {e}")
 
 # ====================== INITIALISE SESSION STATE ======================
 if "participants" not in st.session_state:
@@ -118,12 +133,12 @@ with tab2:
         split_with = st.multiselect("Who shares this expense?", participants, default=[payer])
 
     if st.button("✅ Add Expense", type="primary"):
-        if amount > 0 and description and split_with:
+        if amount > 0 and description.strip() and split_with:
             expense = {
                 "id": str(uuid.uuid4()),
                 "payer": payer,
                 "amount": round(amount, 2),
-                "description": description,
+                "description": description.strip(),
                 "split_with": split_with
             }
             st.session_state.expenses.append(expense)
@@ -147,13 +162,13 @@ with tab3:
     trans_desc = st.text_input("Description", placeholder="e.g. Borrowed for taxi", key="trans_desc")
 
     if st.button("✅ Add Transfer", type="primary"):
-        if from_person != to_person and trans_amount > 0 and trans_desc:
+        if from_person != to_person and trans_amount > 0 and trans_desc.strip():
             transfer = {
                 "id": str(uuid.uuid4()),
                 "from_person": from_person,
                 "to_person": to_person,
                 "amount": round(trans_amount, 2),
-                "description": trans_desc
+                "description": trans_desc.strip()
             }
             st.session_state.transfers.append(transfer)
             st.success(f"Transfer recorded: {from_person} → {to_person}")
@@ -165,7 +180,6 @@ with tab3:
 with tab4:
     st.header("All Transactions")
 
-    # Expenses
     st.subheader("Expenses")
     if not st.session_state.expenses:
         st.info("No expenses yet")
@@ -173,19 +187,18 @@ with tab4:
         for exp in st.session_state.expenses:
             col_a, col_b, col_c = st.columns([5, 1, 1])
             with col_a:
-                st.write(f"**{exp['description']}**")
-                st.write(f"Paid by **{exp['payer']}** • {symbol} {exp['amount']:.2f}")
-                st.write(f"Split with: {', '.join(exp['split_with'])}")
+                st.write(f"**{exp.get('description', 'No description')}**")
+                st.write(f"Paid by **{exp.get('payer', 'Unknown')}** • {symbol} {exp.get('amount', 0):.2f}")
+                st.write(f"Split with: {', '.join(exp.get('split_with', []))}")
             with col_b:
-                st.caption(exp['id'][:8])
+                st.caption(exp.get('id', '')[:8])
             with col_c:
-                if st.button("🗑️", key=f"del_exp_{exp['id']}"):
-                    st.session_state.expenses = [e for e in st.session_state.expenses if e['id'] != exp['id']]
+                if st.button("🗑️", key=f"del_exp_{exp.get('id', '')}"):
+                    st.session_state.expenses = [e for e in st.session_state.expenses if e.get('id') != exp.get('id')]
                     st.rerun()
 
     st.divider()
 
-    # Transfers
     st.subheader("Transfers / Loans")
     if not st.session_state.transfers:
         st.info("No transfers yet")
@@ -193,48 +206,54 @@ with tab4:
         for trans in st.session_state.transfers:
             col_a, col_b, col_c = st.columns([5, 1, 1])
             with col_a:
-                st.write(f"**{trans['from_person']}** → **{trans['to_person']}**")
-                st.write(f"{symbol} {trans['amount']:.2f} • {trans['description']}")
+                st.write(f"**{trans.get('from_person', 'Unknown')}** → **{trans.get('to_person', 'Unknown')}**")
+                st.write(f"{symbol} {trans.get('amount', 0):.2f} • {trans.get('description', 'No description')}")
             with col_b:
-                st.caption(trans['id'][:8])
+                st.caption(trans.get('id', '')[:8])
             with col_c:
-                if st.button("🗑️", key=f"del_trans_{trans['id']}"):
-                    st.session_state.transfers = [t for t in st.session_state.transfers if t['id'] != trans['id']]
+                if st.button("🗑️", key=f"del_trans_{trans.get('id', '')}"):
+                    st.session_state.transfers = [t for t in st.session_state.transfers if t.get('id') != trans.get('id')]
                     st.rerun()
 
 # ====================== TAB 5: RESULTS & SETTLEMENTS ======================
 with tab5:
     st.header("Results & Final Settlements")
 
-    if not participants or len(participants) < 2:
+    if len(participants) < 2:
         st.error("Add at least 2 participants")
         st.stop()
 
-    # === CALCULATIONS ===
+    # === CALCULATIONS (safe version) ===
     paid = {p: 0.0 for p in participants}
     owed = {p: 0.0 for p in participants}
 
     for exp in st.session_state.expenses:
-        if exp["payer"] in paid:
-            paid[exp["payer"]] += exp["amount"]
-        share = exp["amount"] / len(exp["split_with"]) if exp["split_with"] else 0
-        for person in exp["split_with"]:
-            if person in owed:
-                owed[person] += share
+        if isinstance(exp, dict):
+            payer = exp.get("payer")
+            amount = exp.get("amount", 0)
+            split_with = exp.get("split_with", [])
+            if payer and amount > 0:
+                paid[payer] += amount
+                if split_with:
+                    share = amount / len(split_with)
+                    for person in split_with:
+                        if person in owed:
+                            owed[person] += share
 
-    net = {p: paid[p] - owed[p] for p in participants}
+    net = {p: round(paid[p] - owed[p], 2) for p in participants}
 
     # Apply transfers
     for trans in st.session_state.transfers:
-        if trans["from_person"] in net:
-            net[trans["from_person"]] += trans["amount"]
-        if trans["to_person"] in net:
-            net[trans["to_person"]] -= trans["amount"]
+        if isinstance(trans, dict):
+            frm = trans.get("from_person")
+            to = trans.get("to_person")
+            amt = trans.get("amount", 0)
+            if frm in net:
+                net[frm] = round(net[frm] + amt, 2)
+            if to in net:
+                net[to] = round(net[to] - amt, 2)
 
-    for p in net:
-        net[p] = round(net[p], 2)
-
-    st.metric("Total Trip Expenses", f"{symbol} {sum(e['amount'] for e in st.session_state.expenses):.2f}")
+    st.metric("Total Trip Expenses", f"{symbol} {sum(e.get('amount', 0) for e in st.session_state.expenses):.2f}")
 
     st.subheader("Individual Balances")
     for p in participants:
@@ -246,7 +265,7 @@ with tab5:
         else:
             st.info(f"**{p}** is settled")
 
-    # Minimal Settlements
+    # ====================== MINIMAL SETTLEMENTS ======================
     st.subheader("💸 Suggested Minimal Transfers")
     creditors = [p for p in participants if net[p] > 0.01]
     debtors = [p for p in participants if net[p] < -0.01]
