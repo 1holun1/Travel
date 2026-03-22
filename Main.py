@@ -16,7 +16,7 @@ st.caption("Record expenses, borrowings & auto-calculate who owes whom • Defau
 # ====================== SIDEBAR ======================
 st.sidebar.header("Settings")
 
-# Currency (persists automatically)
+# Currency
 currency = st.sidebar.selectbox(
     "Currency",
     options=["RM", "HKD"],
@@ -55,7 +55,6 @@ if uploaded:
         st.session_state.participants = data.get("participants", ["Rachel", "Cady", "Justin", "Plastic", "Jovan", "Evan", "Clayton"])
         st.session_state.expenses = data.get("expenses", [])
         st.session_state.transfers = data.get("transfers", [])
-        st.session_state.currency = data.get("currency", "RM")
         st.success("✅ Backup loaded!")
         st.rerun()
     except:
@@ -207,7 +206,7 @@ with tab4:
 with tab5:
     st.header("Results & Final Settlements")
 
-    if not participants:
+    if not participants or len(participants) < 2:
         st.error("Add at least 2 participants")
         st.stop()
 
@@ -223,7 +222,6 @@ with tab5:
             if person in owed:
                 owed[person] += share
 
-    # Base net
     net = {p: paid[p] - owed[p] for p in participants}
 
     # Apply transfers
@@ -233,12 +231,9 @@ with tab5:
         if trans["to_person"] in net:
             net[trans["to_person"]] -= trans["amount"]
 
-    # Round for display
     for p in net:
         net[p] = round(net[p], 2)
 
-    # Total check
-    total_net = sum(net.values())
     st.metric("Total Trip Expenses", f"{symbol} {sum(e['amount'] for e in st.session_state.expenses):.2f}")
 
     st.subheader("Individual Balances")
@@ -251,13 +246,13 @@ with tab5:
         else:
             st.info(f"**{p}** is settled")
 
-    # ====================== MINIMAL SETTLEMENTS ======================
+    # Minimal Settlements
     st.subheader("💸 Suggested Minimal Transfers")
     creditors = [p for p in participants if net[p] > 0.01]
     debtors = [p for p in participants if net[p] < -0.01]
 
     creditors.sort(key=lambda p: net[p], reverse=True)
-    debtors.sort(key=lambda p: net[p])  # most negative first
+    debtors.sort(key=lambda p: net[p])
 
     balances = net.copy()
     settlements = []
@@ -270,9 +265,9 @@ with tab5:
             settlements.append((deb, cred, round(amt, 2)))
             balances[deb] += amt
             balances[cred] -= amt
-        if balances[deb] > -0.01:
+        if abs(balances[deb]) < 0.01:
             i += 1
-        if balances[cred] < 0.01:
+        if abs(balances[cred]) < 0.01:
             j += 1
 
     if settlements:
@@ -283,9 +278,3 @@ with tab5:
         st.success("🎉 Everyone is already settled! No transfers required.")
 
     st.caption("All calculations include expenses + borrowings. Currency: " + currency)
-</code></pre>
-    <hr>
-    <p><strong>Done! 🚀</strong> Just run <code>streamlit run app.py</code> and start recording your trip with Rachel, Cady, Justin, Plastic, Jovan, Evan & Clayton.</p>
-    <p>Any tweaks needed? (e.g. unequal splits, categories, photos) Just tell me and I’ll update the code instantly.</p>
-</body>
-</html>
